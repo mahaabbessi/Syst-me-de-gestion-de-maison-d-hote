@@ -11,4 +11,4 @@ const chambreSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-module.exports = mongoose.model("Chambre", chambreSchema);
+module.exports = mongoose.model("Chambre", chambreSchema,"chambre");
