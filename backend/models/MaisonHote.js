@@ -28,4 +28,4 @@ const maisonHoteSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-module.exports = mongoose.model("MaisonHote", maisonHoteSchema);
+module.exports = mongoose.model("MaisonHote", maisonHoteSchema,"maison");
