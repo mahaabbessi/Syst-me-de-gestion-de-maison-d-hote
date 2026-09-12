@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+
 import {
   ArrowLeft,
   CalendarDays,
@@ -10,6 +11,9 @@ import {
   CheckCircle,
   BedDouble,
   Loader2,
+  CloudSun,
+  ExternalLink,
+  Navigation,
 } from "lucide-react";
 
 import {
@@ -22,14 +26,27 @@ const BACKEND_URL =
   import.meta.env.VITE_API_URL ||
   "https://gestion-maison-hote-backend.onrender.com";
 
+const WEATHER_API_KEY = import.meta.env.VITE_WEATHER_API_KEY;
+
+const DEFAULT_MAISON_IMAGE =
+  "https://images.unsplash.com/photo-1564501049412-61c2a3083791?w=1200";
+
+const DEFAULT_CHAMBRE_IMAGE =
+  "https://images.unsplash.com/photo-1611892440504-42a792e24d32?w=800";
+
 export default function MaisonDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
 
   const [maison, setMaison] = useState(null);
   const [chambres, setChambres] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [loadingChambres, setLoadingChambres] = useState(true);
+
+  const [meteo, setMeteo] = useState(null);
+  const [loadingMeteo, setLoadingMeteo] = useState(false);
+  const [erreurMeteo, setErreurMeteo] = useState("");
 
   const [showModal, setShowModal] = useState(false);
   const [chambreSelectionnee, setChambreSelectionnee] = useState(null);
@@ -44,6 +61,7 @@ export default function MaisonDetailPage() {
 
   const [confirmationMessage, setConfirmationMessage] = useState(null);
   const [showNotification, setShowNotification] = useState(false);
+
   const [erreurDates, setErreurDates] = useState("");
   const [erreurReservation, setErreurReservation] = useState("");
 
@@ -52,8 +70,8 @@ export default function MaisonDetailPage() {
       return 0;
     }
 
-    const debut = new Date(dateDebut);
-    const fin = new Date(dateFin);
+    const debut = new Date(`${dateDebut}T00:00:00`);
+    const fin = new Date(`${dateFin}T00:00:00`);
 
     const difference = fin.getTime() - debut.getTime();
 
@@ -74,14 +92,114 @@ export default function MaisonDetailPage() {
     return Number(chambreSelectionnee.prix || 0) * nuits;
   };
 
+  const obtenirCoordonneesMaison = () => {
+    const latitude =
+      maison?.latitude ??
+      maison?.lat ??
+      maison?.coordonnees?.latitude ??
+      maison?.coordinates?.lat;
+
+    const longitude =
+      maison?.longitude ??
+      maison?.lng ??
+      maison?.coordonnees?.longitude ??
+      maison?.coordinates?.lng;
+
+    if (
+      latitude !== undefined &&
+      latitude !== null &&
+      longitude !== undefined &&
+      longitude !== null
+    ) {
+      return {
+        latitude,
+        longitude,
+      };
+    }
+
+    return null;
+  };
+
+  const ouvrirGoogleMaps = () => {
+    if (!maison) {
+      return;
+    }
+
+    const coordonnees = obtenirCoordonneesMaison();
+
+    let url = "";
+
+    if (coordonnees) {
+      url = `https://www.google.com/maps/search/?api=1&query=${coordonnees.latitude},${coordonnees.longitude}`;
+    } else {
+      const adresse = [maison.adresse, maison.ville]
+        .filter(Boolean)
+        .join(", ");
+
+      url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+        adresse
+      )}`;
+    }
+
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const chargerMeteo = async (ville) => {
+    if (!ville) {
+      setErreurMeteo("La ville de cette maison est introuvable.");
+      return;
+    }
+
+    if (!WEATHER_API_KEY) {
+      setErreurMeteo(
+        "La clé météo est absente. Ajoutez VITE_WEATHER_API_KEY dans le fichier .env."
+      );
+      return;
+    }
+
+    try {
+      setLoadingMeteo(true);
+      setErreurMeteo("");
+
+      const response = await fetch(
+        `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(
+          ville
+        )}&appid=${WEATHER_API_KEY}&units=metric&lang=fr`
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.message || "Impossible de récupérer la météo."
+        );
+      }
+
+      setMeteo(data);
+    } catch (error) {
+      console.error("Erreur récupération météo :", error);
+      setMeteo(null);
+      setErreurMeteo(
+        "La météo de cette ville n'est pas disponible actuellement."
+      );
+    } finally {
+      setLoadingMeteo(false);
+    }
+  };
+
   useEffect(() => {
     const chargerMaison = async () => {
       try {
         setLoading(true);
 
         const response = await getMaisonById(id);
+        const maisonRecuperee = response?.data || response;
 
-        setMaison(response.data || response);
+        setMaison(maisonRecuperee);
+
+        if (maisonRecuperee?.ville) {
+          chargerMeteo(maisonRecuperee.ville);
+        }
       } catch (error) {
         console.error("Erreur récupération maison :", error);
         setMaison(null);
@@ -99,8 +217,9 @@ export default function MaisonDetailPage() {
         setLoadingChambres(true);
 
         const response = await getChambresByMaison(id);
+        const chambresRecuperees = response?.data || response || [];
 
-        setChambres(response.data || response || []);
+        setChambres(Array.isArray(chambresRecuperees) ? chambresRecuperees : []);
       } catch (error) {
         console.error("Erreur récupération chambres :", error);
         setChambres([]);
@@ -162,7 +281,9 @@ export default function MaisonDetailPage() {
     setErreurReservation("");
 
     if (!checkIn || !checkOut) {
-      setErreurDates("Veuillez choisir la date d'arrivée et la date de départ.");
+      setErreurDates(
+        "Veuillez choisir la date d'arrivée et la date de départ."
+      );
       return;
     }
 
@@ -196,8 +317,6 @@ export default function MaisonDetailPage() {
     try {
       setReservationEnCours(true);
 
-      console.log("Envoi de la réservation...");
-
       const response = await createReservation({
         chambreId: chambreSelectionnee._id,
         dateDebut: checkIn,
@@ -206,7 +325,7 @@ export default function MaisonDetailPage() {
         nombreEnfants: Number(enfants),
       });
 
-      console.log("Réponse réservation :", response.data);
+      console.log("Réponse réservation :", response?.data || response);
 
       const total = Number(chambreSelectionnee.prix || 0) * nuits;
 
@@ -232,13 +351,13 @@ export default function MaisonDetailPage() {
       console.error("Erreur lors de la réservation :", error);
 
       const message =
-        error.response?.data?.message ||
-        error.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.response?.data?.error ||
+        error?.message ||
         "Une erreur est survenue pendant la réservation.";
 
       setErreurReservation(message);
     } finally {
-      // Très important : le bouton revient à son état normal
       setReservationEnCours(false);
     }
   };
@@ -253,10 +372,15 @@ export default function MaisonDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <div className="text-center">
-          <Loader2 className="animate-spin mx-auto text-yellow-600" size={45} />
-          <p className="mt-3 text-gray-600">Chargement de la maison...</p>
+          <Loader2
+            className="mx-auto animate-spin text-yellow-600"
+            size={45}
+          />
+          <p className="mt-3 text-gray-600">
+            Chargement de la maison...
+          </p>
         </div>
       </div>
     );
@@ -264,14 +388,14 @@ export default function MaisonDetailPage() {
 
   if (!maison) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50">
         <h2 className="text-2xl font-bold text-gray-800">
           Maison introuvable
         </h2>
 
         <button
           onClick={() => navigate("/maisons")}
-          className="mt-5 bg-yellow-600 text-white px-5 py-3 rounded-xl"
+          className="mt-5 rounded-xl bg-yellow-600 px-5 py-3 text-white"
         >
           Retour aux maisons
         </button>
@@ -279,10 +403,18 @@ export default function MaisonDetailPage() {
     );
   }
 
+  const coordonneesMaison = obtenirCoordonneesMaison();
+
+  const imageMaison =
+    maison.photos?.[0] ||
+    maison.image ||
+    maison.photo ||
+    DEFAULT_MAISON_IMAGE;
+
   return (
     <div className="min-h-screen bg-gray-50">
       {showNotification && (
-        <div className="fixed top-5 right-5 z-[200] w-[calc(100%-40px)] max-w-md">
+        <div className="fixed right-5 top-5 z-[200] w-[calc(100%-40px)] max-w-md">
           <div className="flex items-start gap-3 rounded-2xl bg-green-600 p-5 text-white shadow-2xl">
             <CheckCircle size={30} className="mt-1 shrink-0" />
 
@@ -323,7 +455,9 @@ export default function MaisonDetailPage() {
             Retour aux maisons
           </button>
 
-          <h1 className="text-xl font-bold text-yellow-500">DarHôte</h1>
+          <h1 className="text-xl font-bold text-yellow-500">
+            DarHôte
+          </h1>
         </div>
       </header>
 
@@ -332,10 +466,7 @@ export default function MaisonDetailPage() {
           <div className="grid grid-cols-1 gap-0 lg:grid-cols-2">
             <div className="h-[320px] lg:h-[450px]">
               <img
-                src={
-                  maison.photos?.[0] ||
-                  "https://images.unsplash.com/photo-1564501049412-61c2a3083791?w=1200"
-                }
+                src={imageMaison}
                 alt={maison.nom}
                 className="h-full w-full object-cover"
               />
@@ -344,7 +475,11 @@ export default function MaisonDetailPage() {
             <div className="p-6 sm:p-8">
               <div className="mb-3 flex items-center gap-2 text-sm text-gray-500">
                 <MapPin size={17} />
-                {maison.adresse}, {maison.ville}
+
+                <span>
+                  {maison.adresse || "Adresse non disponible"}
+                  {maison.ville ? `, ${maison.ville}` : ""}
+                </span>
               </div>
 
               <h2 className="text-3xl font-bold text-gray-900">
@@ -352,15 +487,21 @@ export default function MaisonDetailPage() {
               </h2>
 
               <div className="mt-3 flex items-center gap-1">
-                <Star size={18} className="fill-yellow-500 text-yellow-500" />
+                <Star
+                  size={18}
+                  className="fill-yellow-500 text-yellow-500"
+                />
+
                 <span className="font-semibold">
                   {maison.note || "4.5"}
                 </span>
+
                 <span className="text-gray-500">/ 5</span>
               </div>
 
               <p className="mt-6 leading-7 text-gray-600">
-                {maison.description || "Aucune description disponible."}
+                {maison.description ||
+                  "Aucune description disponible."}
               </p>
 
               {maison.equipements?.length > 0 && (
@@ -381,8 +522,108 @@ export default function MaisonDetailPage() {
                   </div>
                 </div>
               )}
+
+              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={ouvrirGoogleMaps}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white transition hover:bg-blue-700"
+                >
+                  <Navigation size={18} />
+                  Voir sur Google Maps
+                  <ExternalLink size={16} />
+                </button>
+              </div>
+
+              {coordonneesMaison && (
+                <p className="mt-3 text-xs text-gray-400">
+                  Coordonnées : {coordonneesMaison.latitude},{" "}
+                  {coordonneesMaison.longitude}
+                </p>
+              )}
             </div>
           </div>
+        </section>
+
+        <section className="mt-8 rounded-3xl bg-white p-5 shadow-sm sm:p-6">
+          <div className="mb-6 flex items-center gap-3">
+            <CloudSun className="text-yellow-600" size={27} />
+
+            <h2 className="text-2xl font-bold text-gray-900">
+              Météo à {maison.ville || "destination"}
+            </h2>
+          </div>
+
+          {loadingMeteo ? (
+            <div className="py-8 text-center">
+              <Loader2
+                className="mx-auto animate-spin text-yellow-600"
+                size={35}
+              />
+
+              <p className="mt-3 text-gray-500">
+                Chargement de la météo...
+              </p>
+            </div>
+          ) : erreurMeteo ? (
+            <div className="rounded-xl bg-yellow-50 p-4 text-sm text-yellow-800">
+              {erreurMeteo}
+            </div>
+          ) : meteo ? (
+            <div className="flex flex-col gap-5 rounded-2xl bg-gradient-to-r from-blue-500 to-cyan-500 p-6 text-white sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-lg font-semibold">
+                  {meteo.name}
+                </p>
+
+                <p className="mt-1 text-sm capitalize text-blue-50">
+                  {meteo.weather?.[0]?.description}
+                </p>
+
+                <p className="mt-4 text-5xl font-bold">
+                  {Math.round(meteo.main?.temp)}°C
+                </p>
+              </div>
+
+              <div className="text-center">
+                {meteo.weather?.[0]?.icon && (
+                  <img
+                    src={`https://openweathermap.org/img/wn/${meteo.weather[0].icon}@2x.png`}
+                    alt={meteo.weather?.[0]?.description || "Météo"}
+                    className="mx-auto h-28 w-28"
+                  />
+                )}
+
+                <p className="text-sm">
+                  Ressenti : {Math.round(meteo.main?.feels_like)}°C
+                </p>
+              </div>
+
+              <div className="space-y-2 text-sm">
+                <p>
+                  Humidité : {meteo.main?.humidity}%
+                </p>
+
+                <p>
+                  Vent : {meteo.wind?.speed} m/s
+                </p>
+
+                <p>
+                  Température min :{" "}
+                  {Math.round(meteo.main?.temp_min)}°C
+                </p>
+
+                <p>
+                  Température max :{" "}
+                  {Math.round(meteo.main?.temp_max)}°C
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl bg-gray-50 p-5 text-center text-gray-500">
+              Aucune information météo disponible.
+            </div>
+          )}
         </section>
 
         <section className="mt-8 rounded-3xl bg-white p-5 shadow-sm sm:p-6">
@@ -400,6 +641,7 @@ export default function MaisonDetailPage() {
                 className="mx-auto animate-spin text-yellow-600"
                 size={35}
               />
+
               <p className="mt-3 text-gray-500">
                 Chargement des chambres...
               </p>
@@ -421,7 +663,7 @@ export default function MaisonDetailPage() {
                         chambre.photo ||
                         chambre.image ||
                         chambre.photos?.[0] ||
-                        "https://images.unsplash.com/photo-1611892440504-42a792e24d32?w=800"
+                        DEFAULT_CHAMBRE_IMAGE
                       }
                       alt={chambre.nom}
                       className="h-full w-full object-cover"
@@ -441,6 +683,7 @@ export default function MaisonDetailPage() {
 
                       <div className="mt-3 flex items-center gap-2 text-sm text-gray-500">
                         <Users size={17} />
+
                         Capacité : {chambre.capacite || 2} personnes
                       </div>
                     </div>
@@ -509,7 +752,11 @@ export default function MaisonDetailPage() {
 
                 <div className="mb-5">
                   <div className="mb-2 flex items-center gap-2 font-semibold text-gray-800">
-                    <CalendarDays size={18} className="text-yellow-600" />
+                    <CalendarDays
+                      size={18}
+                      className="text-yellow-600"
+                    />
+
                     Dates
                   </div>
 
@@ -539,7 +786,10 @@ export default function MaisonDetailPage() {
                       <input
                         type="date"
                         value={checkOut}
-                        min={checkIn || new Date().toISOString().split("T")[0]}
+                        min={
+                          checkIn ||
+                          new Date().toISOString().split("T")[0]
+                        }
                         onChange={(event) =>
                           modifierDate("checkOut", event.target.value)
                         }
@@ -609,7 +859,8 @@ export default function MaisonDetailPage() {
 
                 <div className="mb-5 rounded-xl bg-gray-50 p-5 text-center">
                   <p className="text-gray-500">
-                    Total pour {calculerNuits(checkIn, checkOut) || 0} nuit
+                    Total pour{" "}
+                    {calculerNuits(checkIn, checkOut) || 0} nuit
                     {calculerNuits(checkIn, checkOut) > 1 ? "s" : ""}
                   </p>
 
