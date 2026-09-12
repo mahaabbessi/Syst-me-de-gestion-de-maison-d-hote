@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
+import {
+  ArrowLeft,
+  CalendarDays,
+  Users,
+  MapPin,
+  Star,
+  X,
+  CheckCircle,
+  BedDouble,
+  Loader2,
+} from "lucide-react";
 
 import {
   getMaisonById,
@@ -7,396 +18,293 @@ import {
   createReservation,
 } from "../services/api";
 
-import {
-  MapPin,
-  Star,
-  ChevronLeft,
-  ChevronRight,
-  X,
-  Image as ImageIcon,
-  CheckCircle,
-} from "lucide-react";
-
-import GoogleMapComponent from "../components/GoogleMap";
-import WeatherWidget from "../components/WeatherWidget";
+const BACKEND_URL =
+  import.meta.env.VITE_API_URL ||
+  "https://gestion-maison-hote-backend.onrender.com";
 
 export default function MaisonDetailPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
 
   const [maison, setMaison] = useState(null);
   const [chambres, setChambres] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingChambres, setLoadingChambres] = useState(true);
 
-  const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
-  const [showMap, setShowMap] = useState(false);
-  const [showAllPhotos, setShowAllPhotos] = useState(false);
-
-  // États réservation
   const [showModal, setShowModal] = useState(false);
   const [chambreSelectionnee, setChambreSelectionnee] = useState(null);
+
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
   const [adultes, setAdultes] = useState(2);
   const [enfants, setEnfants] = useState(0);
-  const [prixTotal, setPrixTotal] = useState(null);
+
+  const [prixTotal, setPrixTotal] = useState(0);
   const [reservationEnCours, setReservationEnCours] = useState(false);
+
   const [confirmationMessage, setConfirmationMessage] = useState(null);
-  const [erreurDates, setErreurDates] = useState("");
-
-  // Nouvelle notification visible dans la page
   const [showNotification, setShowNotification] = useState(false);
+  const [erreurDates, setErreurDates] = useState("");
+  const [erreurReservation, setErreurReservation] = useState("");
 
-  // URL backend Render
-  const BACKEND_URL =
-    import.meta.env.VITE_API_URL ||
-    "https://gestion-maison-hote-backend.onrender.com";
-
-  // Corriger les chemins des photos
-  const getPhotoUrl = (photo) => {
-    if (!photo) return null;
-
-    if (photo.startsWith("http://") || photo.startsWith("https://")) {
-      return photo;
-    }
-
-    if (photo.startsWith("/")) {
-      return photo;
-    }
-
-    return `/${photo}`;
-  };
-
-  // URL alternative pour les photos du backend
-  const getBackendPhotoUrl = (photo) => {
-    if (!photo) return null;
-
-    if (photo.startsWith("http://") || photo.startsWith("https://")) {
-      return photo;
-    }
-
-    if (photo.startsWith("/")) {
-      return `${BACKEND_URL}${photo}`;
-    }
-
-    return `${BACKEND_URL}/${photo}`;
-  };
-
-  const handleImageError = (event, photo, fallback) => {
-    const image = event.currentTarget;
-    const backendPhoto = getBackendPhotoUrl(photo);
-
-    if (
-      backendPhoto &&
-      image.src !== backendPhoto &&
-      !image.dataset.backendTried
-    ) {
-      image.dataset.backendTried = "true";
-      image.src = backendPhoto;
-      return;
-    }
-
-    if (fallback && image.src !== fallback) {
-      image.src = fallback;
-    }
-  };
-
-  // Date du jour
-  const getTodayDate = () => {
-    const today = new Date();
-
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, "0");
-    const day = String(today.getDate()).padStart(2, "0");
-
-    return `${year}-${month}-${day}`;
-  };
-
-  // Calcul du nombre de nuits
-  const calculerNuits = (debut, fin) => {
-    if (!debut || !fin) {
+  const calculerNuits = (dateDebut, dateFin) => {
+    if (!dateDebut || !dateFin) {
       return 0;
     }
 
-    const dateDebut = new Date(debut);
-    const dateFin = new Date(fin);
+    const debut = new Date(dateDebut);
+    const fin = new Date(dateFin);
 
-    const diffTime = dateFin - dateDebut;
+    const difference = fin.getTime() - debut.getTime();
 
-    const diffNuits = Math.ceil(
-      diffTime / (1000 * 60 * 60 * 24)
-    );
-
-    return diffNuits > 0 ? diffNuits : 0;
+    return Math.ceil(difference / (1000 * 60 * 60 * 24));
   };
 
-  // Validation des dates
-  const validerDates = (debut, fin) => {
-    if (!debut || !fin) {
-      return true;
+  const calculerPrixTotal = () => {
+    if (!chambreSelectionnee || !checkIn || !checkOut) {
+      return 0;
     }
 
-    const dateDebut = new Date(debut);
-    const dateFin = new Date(fin);
+    const nuits = calculerNuits(checkIn, checkOut);
 
-    const aujourdHui = new Date();
-    aujourdHui.setHours(0, 0, 0, 0);
-
-    if (dateDebut < aujourdHui) {
-      setErreurDates(
-        "❌ La date de début ne peut pas être dans le passé"
-      );
-
-      return false;
+    if (nuits <= 0) {
+      return 0;
     }
 
-    if (dateFin <= dateDebut) {
-      setErreurDates(
-        "❌ La date de fin doit être après la date de début"
-      );
-
-      return false;
-    }
-
-    setErreurDates("");
-    return true;
+    return Number(chambreSelectionnee.prix || 0) * nuits;
   };
 
-  // Charger la maison et les chambres
   useEffect(() => {
-    const chargerDonnees = async () => {
+    const chargerMaison = async () => {
       try {
-        const maisonResponse = await getMaisonById(id);
-        setMaison(maisonResponse.data);
+        setLoading(true);
 
-        const chambresResponse = await getChambresByMaison(id);
-        setChambres(chambresResponse.data);
+        const response = await getMaisonById(id);
+
+        setMaison(response.data || response);
       } catch (error) {
-        console.error(
-          "Erreur chargement maison/chambres :",
-          error
-        );
-
-        setChambres([]);
+        console.error("Erreur récupération maison :", error);
+        setMaison(null);
       } finally {
         setLoading(false);
       }
     };
 
-    if (id) {
-      chargerDonnees();
-    }
+    chargerMaison();
   }, [id]);
 
-  // Calcul automatique du prix
   useEffect(() => {
-    if (chambreSelectionnee && checkIn && checkOut) {
-      const nuits = calculerNuits(checkIn, checkOut);
+    const chargerChambres = async () => {
+      try {
+        setLoadingChambres(true);
 
-      if (nuits > 0) {
-        setPrixTotal(
-          Number(chambreSelectionnee.prix || 0) * nuits
-        );
-      } else {
-        setPrixTotal(null);
+        const response = await getChambresByMaison(id);
+
+        setChambres(response.data || response || []);
+      } catch (error) {
+        console.error("Erreur récupération chambres :", error);
+        setChambres([]);
+      } finally {
+        setLoadingChambres(false);
       }
-    } else {
-      setPrixTotal(null);
-    }
+    };
+
+    chargerChambres();
+  }, [id]);
+
+  useEffect(() => {
+    setPrixTotal(calculerPrixTotal());
   }, [checkIn, checkOut, chambreSelectionnee]);
 
-  // Validation automatique des dates
-  useEffect(() => {
-    if (checkIn && checkOut) {
-      validerDates(checkIn, checkOut);
-    } else {
-      setErreurDates("");
-    }
-  }, [checkIn, checkOut]);
-
-  // Ouvrir la modale
   const ouvrirModal = (chambre) => {
     setChambreSelectionnee(chambre);
     setShowModal(true);
+
+    setCheckIn("");
+    setCheckOut("");
+    setAdultes(2);
+    setEnfants(0);
+    setPrixTotal(0);
+
+    setErreurDates("");
+    setErreurReservation("");
     setConfirmationMessage(null);
     setShowNotification(false);
-
-    setCheckIn("");
-    setCheckOut("");
-    setAdultes(2);
-    setEnfants(0);
-    setPrixTotal(null);
-    setErreurDates("");
   };
 
-  // Fermer et réinitialiser
-  const fermerModalEtReinitialiser = () => {
+  const fermerModal = () => {
+    if (reservationEnCours) {
+      return;
+    }
+
     setShowModal(false);
-    setConfirmationMessage(null);
     setChambreSelectionnee(null);
-    setCheckIn("");
-    setCheckOut("");
-    setPrixTotal(null);
-    setAdultes(2);
-    setEnfants(0);
-    setReservationEnCours(false);
+    setConfirmationMessage(null);
     setErreurDates("");
+    setErreurReservation("");
   };
 
-  // Créer la réservation
+  const modifierDate = (type, value) => {
+    if (type === "checkIn") {
+      setCheckIn(value);
+    }
+
+    if (type === "checkOut") {
+      setCheckOut(value);
+    }
+
+    setErreurDates("");
+    setErreurReservation("");
+  };
+
   const reserverMaintenant = async () => {
+    setErreurDates("");
+    setErreurReservation("");
+
     if (!checkIn || !checkOut) {
-      setErreurDates("❌ Veuillez sélectionner les dates");
+      setErreurDates("Veuillez choisir la date d'arrivée et la date de départ.");
       return;
     }
 
-    if (!validerDates(checkIn, checkOut)) {
+    if (new Date(checkOut) <= new Date(checkIn)) {
+      setErreurDates(
+        "La date de départ doit être après la date d'arrivée."
+      );
       return;
     }
 
-    if (!chambreSelectionnee) {
-      alert("Veuillez sélectionner une chambre");
+    const nuits = calculerNuits(checkIn, checkOut);
+
+    if (nuits <= 0) {
+      setErreurDates("Les dates sélectionnées sont invalides.");
       return;
     }
 
     const token = localStorage.getItem("token");
 
     if (!token) {
-      alert("Veuillez vous connecter");
+      alert("Veuillez vous connecter pour effectuer une réservation.");
+      navigate("/login");
       return;
     }
 
-    setReservationEnCours(true);
-    setErreurDates("");
+    if (!chambreSelectionnee) {
+      setErreurReservation("Veuillez sélectionner une chambre.");
+      return;
+    }
 
     try {
+      setReservationEnCours(true);
+
+      console.log("Envoi de la réservation...");
+
       const response = await createReservation({
         chambreId: chambreSelectionnee._id,
         dateDebut: checkIn,
         dateFin: checkOut,
-        nombreAdultes: adultes,
-        nombreEnfants: enfants,
+        nombreAdultes: Number(adultes),
+        nombreEnfants: Number(enfants),
       });
 
-      const data = response.data;
+      console.log("Réponse réservation :", response.data);
 
-      console.log("Réservation créée :", data);
+      const total = Number(chambreSelectionnee.prix || 0) * nuits;
 
-      const nuits = calculerNuits(checkIn, checkOut);
-
-      // Calcul local pour éviter un ancien prixTotal null
-      const totalCalcule =
-        Number(chambreSelectionnee.prix || 0) * nuits;
-
-      setPrixTotal(totalCalcule);
+      setPrixTotal(total);
 
       setConfirmationMessage({
         suite: chambreSelectionnee.nom,
         prix: chambreSelectionnee.prix,
-        dates: {
-          checkIn,
-          checkOut,
-        },
+        checkIn,
+        checkOut,
         adultes,
         enfants,
         nuits,
-        total: totalCalcule,
+        total,
       });
 
-      // Afficher la notification verte
       setShowNotification(true);
 
-      // Cacher la notification après 6 secondes
       setTimeout(() => {
         setShowNotification(false);
       }, 6000);
     } catch (error) {
-      console.error("Erreur réservation :", error);
+      console.error("Erreur lors de la réservation :", error);
 
-      if (error.response?.status === 409) {
-        setErreurDates(
-          "❌ Cette chambre est déjà réservée pour ces dates !"
-        );
+      const message =
+        error.response?.data?.message ||
+        error.response?.data?.error ||
+        "Une erreur est survenue pendant la réservation.";
 
-        alert(
-          "❌ Cette chambre est déjà réservée pour ces dates !"
-        );
-      } else if (error.response?.data?.message) {
-        alert(error.response.data.message);
-      } else {
-        alert("Erreur lors de la réservation");
-      }
+      setErreurReservation(message);
     } finally {
+      // Très important : le bouton revient à son état normal
       setReservationEnCours(false);
     }
   };
 
-  // Photo suivante
-  const nextPhoto = () => {
-    if (maison?.photos?.length) {
-      setCurrentPhotoIndex(
-        (prev) => (prev + 1) % maison.photos.length
-      );
+  const formatDate = (date) => {
+    if (!date) {
+      return "";
     }
-  };
 
-  // Photo précédente
-  const prevPhoto = () => {
-    if (maison?.photos?.length) {
-      setCurrentPhotoIndex(
-        (prev) =>
-          (prev - 1 + maison.photos.length) %
-          maison.photos.length
-      );
-    }
+    return new Date(date).toLocaleDateString("fr-FR");
   };
 
   if (loading) {
     return (
-      <div className="text-center py-20">
-        Chargement...
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <Loader2 className="animate-spin mx-auto text-yellow-600" size={45} />
+          <p className="mt-3 text-gray-600">Chargement de la maison...</p>
+        </div>
       </div>
     );
   }
 
   if (!maison) {
     return (
-      <div className="text-center py-20">
-        Maison non trouvée
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
+        <h2 className="text-2xl font-bold text-gray-800">
+          Maison introuvable
+        </h2>
+
+        <button
+          onClick={() => navigate("/maisons")}
+          className="mt-5 bg-yellow-600 text-white px-5 py-3 rounded-xl"
+        >
+          Retour aux maisons
+        </button>
       </div>
     );
   }
 
-  const toutesLesPhotos = maison.photos || [];
-
   return (
     <div className="min-h-screen bg-gray-50">
-
-      {/* NOTIFICATION DE CONFIRMATION */}
       {showNotification && (
-        <div className="fixed top-5 right-5 z-[100] max-w-sm w-[calc(100%-40px)]">
-          <div className="bg-green-600 text-white rounded-xl shadow-2xl p-4 flex items-start gap-3">
-            <CheckCircle
-              size={28}
-              className="flex-shrink-0 mt-1"
-            />
+        <div className="fixed top-5 right-5 z-[200] w-[calc(100%-40px)] max-w-md">
+          <div className="flex items-start gap-3 rounded-2xl bg-green-600 p-5 text-white shadow-2xl">
+            <CheckCircle size={30} className="mt-1 shrink-0" />
 
             <div className="flex-1">
-              <h3 className="font-bold text-lg">
+              <h3 className="text-lg font-bold">
                 Réservation confirmée !
               </h3>
 
-              <p className="text-sm mt-1">
+              <p className="mt-1 text-sm">
                 Votre réservation a été confirmée avec succès.
               </p>
 
-              <p className="text-sm mt-1">
-                Vous pouvez consulter vos réservations dans votre espace client.
+              <p className="mt-1 text-sm">
+                Vous pouvez consulter vos réservations dans votre espace
+                client.
               </p>
             </div>
 
             <button
+              type="button"
               onClick={() => setShowNotification(false)}
-              className="text-white hover:text-green-200"
+              className="rounded-lg p-1 hover:bg-green-700"
             >
               <X size={20} />
             </button>
@@ -404,633 +312,402 @@ export default function MaisonDetailPage() {
         </div>
       )}
 
-      {/* PHOTO PRINCIPALE */}
-      <div className="py-8">
-        <div className="max-w-4xl mx-auto px-4">
-          <div className="relative bg-gray-100 rounded-xl overflow-hidden shadow-lg">
-            <img
-              src={
-                getPhotoUrl(
-                  toutesLesPhotos[currentPhotoIndex]
-                ) || "/images/default-house.jpg"
-              }
-              alt={maison.nom}
-              className="w-full h-[400px] object-cover"
-              onError={(event) =>
-                handleImageError(
-                  event,
-                  toutesLesPhotos[currentPhotoIndex],
-                  "/images/default-house.jpg"
-                )
-              }
-            />
+      <header className="bg-gray-950 px-6 py-5 text-white">
+        <div className="mx-auto flex max-w-7xl items-center justify-between">
+          <button
+            type="button"
+            onClick={() => navigate("/maisons")}
+            className="flex items-center gap-2 text-sm hover:text-yellow-400"
+          >
+            <ArrowLeft size={18} />
+            Retour aux maisons
+          </button>
 
-            {toutesLesPhotos.length > 1 && (
-              <>
-                <button
-                  onClick={prevPhoto}
-                  className="absolute left-4 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full transition"
-                >
-                  <ChevronLeft size={24} />
-                </button>
-
-                <button
-                  onClick={nextPhoto}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full transition"
-                >
-                  <ChevronRight size={24} />
-                </button>
-
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2">
-                  {toutesLesPhotos.map((_, index) => (
-                    <button
-                      key={index}
-                      onClick={() =>
-                        setCurrentPhotoIndex(index)
-                      }
-                      className={`w-2 h-2 rounded-full transition ${
-                        index === currentPhotoIndex
-                          ? "bg-white w-6"
-                          : "bg-white/50"
-                      }`}
-                    />
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
+          <h1 className="text-xl font-bold text-yellow-500">DarHôte</h1>
         </div>
-      </div>
+      </header>
 
-      {/* TITRE ET INFORMATIONS */}
-      <div className="max-w-7xl mx-auto px-4 py-4">
-        <h1 className="text-3xl font-bold text-gray-900">
-          {maison.nom}
-        </h1>
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+        <section className="overflow-hidden rounded-3xl bg-white shadow-sm">
+          <div className="grid grid-cols-1 gap-0 lg:grid-cols-2">
+            <div className="h-[320px] lg:h-[450px]">
+              <img
+                src={
+                  maison.photos?.[0] ||
+                  "https://images.unsplash.com/photo-1564501049412-61c2a3083791?w=1200"
+                }
+                alt={maison.nom}
+                className="h-full w-full object-cover"
+              />
+            </div>
 
-        <div className="flex items-center gap-4 mt-2 flex-wrap">
-          <div className="flex items-center gap-1">
-            <MapPin size={16} className="text-gray-400" />
+            <div className="p-6 sm:p-8">
+              <div className="mb-3 flex items-center gap-2 text-sm text-gray-500">
+                <MapPin size={17} />
+                {maison.adresse}, {maison.ville}
+              </div>
 
-            <span className="text-gray-600">
-              {maison.adresse}, {maison.ville}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <Star
-              size={16}
-              className="fill-yellow-400 text-yellow-400"
-            />
-
-            <span className="text-gray-600">
-              {maison.note || 0} / 5
-            </span>
-
-            <span className="text-gray-400">
-              ({maison.nombreAvis || 0} avis)
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-
-          {/* COLONNE GAUCHE */}
-          <div className="lg:col-span-2 space-y-8">
-
-            {/* DESCRIPTION */}
-            <div className="bg-white rounded-xl shadow-sm p-6">
-              <h2 className="text-xl font-bold mb-3">
-                Description
+              <h2 className="text-3xl font-bold text-gray-900">
+                {maison.nom}
               </h2>
 
-              <p className="text-gray-600 leading-relaxed whitespace-pre-line">
-                {maison.description || "Aucune description"}
+              <div className="mt-3 flex items-center gap-1">
+                <Star size={18} className="fill-yellow-500 text-yellow-500" />
+                <span className="font-semibold">
+                  {maison.note || "4.5"}
+                </span>
+                <span className="text-gray-500">/ 5</span>
+              </div>
+
+              <p className="mt-6 leading-7 text-gray-600">
+                {maison.description || "Aucune description disponible."}
+              </p>
+
+              {maison.equipements?.length > 0 && (
+                <div className="mt-6">
+                  <h3 className="mb-3 font-bold text-gray-900">
+                    Équipements
+                  </h3>
+
+                  <div className="flex flex-wrap gap-2">
+                    {maison.equipements.map((equipement, index) => (
+                      <span
+                        key={index}
+                        className="rounded-full bg-yellow-50 px-3 py-2 text-sm text-yellow-700"
+                      >
+                        {equipement}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="mt-8 rounded-3xl bg-white p-5 shadow-sm sm:p-6">
+          <div className="mb-6 flex items-center gap-3">
+            <BedDouble className="text-yellow-600" size={27} />
+
+            <h2 className="text-2xl font-bold text-gray-900">
+              Chambres disponibles
+            </h2>
+          </div>
+
+          {loadingChambres ? (
+            <div className="py-10 text-center">
+              <Loader2
+                className="mx-auto animate-spin text-yellow-600"
+                size={35}
+              />
+              <p className="mt-3 text-gray-500">
+                Chargement des chambres...
               </p>
             </div>
-
-            {/* SERVICES */}
-            <div className="bg-white rounded-xl shadow-sm p-6">
-              <h2 className="text-xl font-bold mb-3">
-                Services & équipements
-              </h2>
-
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                {maison.equipements?.jardin && (
-                  <div>🌳 Jardin</div>
-                )}
-
-                {maison.equipements?.piscine && (
-                  <div>🏊 Piscine</div>
-                )}
-
-                {maison.equipements?.parking && (
-                  <div>🅿️ Parking</div>
-                )}
-
-                {maison.equipements?.wifi && (
-                  <div>📶 Wi-Fi</div>
-                )}
-
-                {maison.equipements?.climatisation && (
-                  <div>❄️ Climatisation</div>
-                )}
-
-                {maison.equipements?.restaurant && (
-                  <div>🍽️ Restaurant</div>
-                )}
-
-                {maison.equipements?.navetteAeroport && (
-                  <div>✈️ Navette</div>
-                )}
-
-                {maison.equipements?.chambresFamiliales && (
-                  <div>👨‍👩‍👧‍👦 Famille</div>
-                )}
-
-                {maison.equipements?.serviceEtage && (
-                  <div>🛎️ Service</div>
-                )}
-
-                {maison.equipements?.nonFumeurs && (
-                  <div>🚭 Non-fumeurs</div>
-                )}
-              </div>
+          ) : chambres.length === 0 ? (
+            <div className="rounded-xl bg-gray-50 p-8 text-center text-gray-500">
+              Aucune chambre disponible pour cette maison.
             </div>
-
-            {/* GALERIE */}
-            <div className="bg-white rounded-xl shadow-sm p-6">
-              <h2 className="text-xl font-bold mb-4">
-                Galerie photos
-              </h2>
-
-              {toutesLesPhotos.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
-                  <ImageIcon
-                    size={48}
-                    className="mx-auto mb-2 opacity-50"
-                  />
-
-                  <p>Aucune photo disponible</p>
-                </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                    {toutesLesPhotos
-                      .slice(0, 6)
-                      .map((photo, index) => (
-                        <div
-                          key={index}
-                          className="aspect-square rounded-xl overflow-hidden bg-gray-100 cursor-pointer hover:opacity-90 transition"
-                          onClick={() =>
-                            setCurrentPhotoIndex(index)
-                          }
-                        >
-                          <img
-                            src={
-                              getPhotoUrl(photo) ||
-                              "/images/default-house.jpg"
-                            }
-                            alt={`Photo ${index + 1}`}
-                            className="w-full h-full object-cover hover:scale-105 transition duration-300"
-                            onError={(event) =>
-                              handleImageError(
-                                event,
-                                photo,
-                                "/images/default-house.jpg"
-                              )
-                            }
-                          />
-                        </div>
-                      ))}
-                  </div>
-
-                  {toutesLesPhotos.length > 6 && (
-                    <button
-                      onClick={() =>
-                        setShowAllPhotos(!showAllPhotos)
+          ) : (
+            <div className="space-y-5">
+              {chambres.map((chambre) => (
+                <div
+                  key={chambre._id}
+                  className="grid grid-cols-1 overflow-hidden rounded-2xl border border-gray-200 md:grid-cols-[240px_1fr]"
+                >
+                  <div className="h-56 md:h-full">
+                    <img
+                      src={
+                        chambre.photo ||
+                        chambre.image ||
+                        chambre.photos?.[0] ||
+                        "https://images.unsplash.com/photo-1611892440504-42a792e24d32?w=800"
                       }
-                      className="mt-4 text-yellow-500 hover:text-yellow-600 font-medium"
-                    >
-                      {showAllPhotos
-                        ? "Voir moins ▲"
-                        : `Voir toutes les photos (${toutesLesPhotos.length}) ▼`}
-                    </button>
-                  )}
-
-                  {showAllPhotos &&
-                    toutesLesPhotos.length > 6 && (
-                      <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4">
-                        {toutesLesPhotos
-                          .slice(6)
-                          .map((photo, index) => (
-                            <div
-                              key={index + 6}
-                              className="aspect-square rounded-xl overflow-hidden bg-gray-100 cursor-pointer hover:opacity-90 transition"
-                              onClick={() =>
-                                setCurrentPhotoIndex(index + 6)
-                              }
-                            >
-                              <img
-                                src={
-                                  getPhotoUrl(photo) ||
-                                  "/images/default-house.jpg"
-                                }
-                                alt={`Photo ${index + 7}`}
-                                className="w-full h-full object-cover hover:scale-105 transition duration-300"
-                                onError={(event) =>
-                                  handleImageError(
-                                    event,
-                                    photo,
-                                    "/images/default-house.jpg"
-                                  )
-                                }
-                              />
-                            </div>
-                          ))}
-                      </div>
-                    )}
-                </>
-              )}
-            </div>
-
-            {/* CHAMBRES */}
-            <div className="bg-white rounded-xl shadow-sm p-6">
-              <h2 className="text-xl font-bold mb-4">
-                Chambres disponibles
-              </h2>
-
-              {chambres.length === 0 ? (
-                <p className="text-gray-400 text-center py-8">
-                  Aucune chambre disponible
-                </p>
-              ) : (
-                <div className="space-y-4">
-                  {chambres.map((chambre) => {
-                    const photoChambre =
-                      chambre.photos?.[0] ||
-                      "/images/chambres/default-room.jpg";
-
-                    return (
-                      <div
-                        key={chambre._id}
-                        className="border rounded-xl p-4 flex flex-col sm:flex-row gap-4 hover:shadow-md transition"
-                      >
-                        <img
-                          src={
-                            getPhotoUrl(photoChambre) ||
-                            "/images/chambres/default-room.jpg"
-                          }
-                          alt={chambre.nom}
-                          className="w-full sm:w-40 h-40 object-cover rounded-lg"
-                          onError={(event) =>
-                            handleImageError(
-                              event,
-                              photoChambre,
-                              "/images/chambres/default-room.jpg"
-                            )
-                          }
-                        />
-
-                        <div className="flex-1">
-                          <h3 className="text-xl font-bold">
-                            {chambre.nom}
-                          </h3>
-
-                          <p className="text-gray-500 text-sm mt-1">
-                            Capacité : {chambre.capacite} personnes
-                          </p>
-
-                          <p className="text-gray-600 text-sm mt-2">
-                            {chambre.description}
-                          </p>
-
-                          <div className="flex justify-between items-center mt-4">
-                            <div>
-                              <span className="text-2xl font-bold text-yellow-600">
-                                {chambre.prix} DT
-                              </span>
-
-                              <span className="text-gray-400">
-                                {" "}
-                                /nuit
-                              </span>
-                            </div>
-
-                            <button
-                              onClick={() =>
-                                ouvrirModal(chambre)
-                              }
-                              className="bg-yellow-500 hover:bg-yellow-600 text-white px-6 py-2 rounded-lg font-semibold transition"
-                            >
-                              Réserver
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* COLONNE DROITE */}
-          <div className="lg:col-span-1 space-y-6">
-
-            {/* MÉTÉO */}
-            <div className="transform scale-105 origin-top">
-              <WeatherWidget ville={maison.ville} />
-            </div>
-
-            {/* GOOGLE MAPS */}
-            {maison.latitude && maison.longitude && (
-              <div className="bg-white rounded-xl shadow-sm p-4">
-                <div className="flex justify-between items-center mb-3">
-                  <h2 className="text-lg font-bold">
-                    📍 Emplacement
-                  </h2>
-
-                  <button
-                    onClick={() => setShowMap(!showMap)}
-                    className="text-yellow-500 text-sm font-medium hover:underline"
-                  >
-                    {showMap ? "Masquer" : "Voir sur carte"}
-                  </button>
-                </div>
-
-                {showMap && (
-                  <div className="h-[400px] rounded-lg overflow-hidden mb-3">
-                    <GoogleMapComponent
-                      latitude={maison.latitude}
-                      longitude={maison.longitude}
-                      address={maison.adresse}
-                      name={maison.nom}
+                      alt={chambre.nom}
+                      className="h-full w-full object-cover"
                     />
                   </div>
-                )}
 
-                <p className="text-sm text-gray-500">
-                  {maison.adresse}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+                  <div className="flex flex-col justify-between p-5">
+                    <div>
+                      <h3 className="text-xl font-bold text-gray-900">
+                        {chambre.nom}
+                      </h3>
 
-      {/* MODALE RÉSERVATION */}
+                      <p className="mt-2 text-gray-600">
+                        {chambre.description ||
+                          "Chambre confortable et bien équipée."}
+                      </p>
+
+                      <div className="mt-3 flex items-center gap-2 text-sm text-gray-500">
+                        <Users size={17} />
+                        Capacité : {chambre.capacite || 2} personnes
+                      </div>
+                    </div>
+
+                    <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <span className="text-3xl font-bold text-yellow-600">
+                          {chambre.prix}
+                        </span>
+
+                        <span className="ml-1 text-gray-500">
+                          DT / nuit
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => ouvrirModal(chambre)}
+                        className="rounded-xl bg-yellow-500 px-6 py-3 font-bold text-white transition hover:bg-yellow-600"
+                      >
+                        Réserver maintenant
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </main>
+
       {showModal && chambreSelectionnee && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={fermerModalEtReinitialiser}
-        >
-          <div
-            className="bg-white rounded-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
+          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-5 flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-gray-900">
+                {confirmationMessage
+                  ? "Réservation confirmée"
+                  : "Réserver"}
+              </h2>
+
+              <button
+                type="button"
+                onClick={fermerModal}
+                disabled={reservationEnCours}
+                className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 disabled:cursor-not-allowed"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
             {!confirmationMessage ? (
               <>
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-2xl font-bold">
-                    Réserver
-                  </h2>
-
-                  <button
-                    onClick={fermerModalEtReinitialiser}
-                    className="text-gray-400 hover:text-gray-600"
-                  >
-                    <X size={24} />
-                  </button>
-                </div>
-
-                <div className="mb-4 p-3 bg-gray-50 rounded-lg">
-                  <p className="font-bold text-lg">
+                <div className="mb-5 rounded-xl bg-gray-50 p-4">
+                  <h3 className="text-xl font-bold text-gray-900">
                     {chambreSelectionnee.nom}
-                  </p>
+                  </h3>
 
-                  <p className="text-yellow-600 font-bold">
-                    {chambreSelectionnee.prix} DT
-                    <span className="text-xs text-gray-400">
-                      {" "}
-                      /nuit
-                    </span>
+                  <p className="mt-1">
+                    <span className="text-2xl font-bold text-yellow-600">
+                      {chambreSelectionnee.prix} DT
+                    </span>{" "}
+                    <span className="text-gray-500">/ nuit</span>
                   </p>
                 </div>
 
-                <div className="mb-4">
-                  <label className="block text-sm font-medium mb-1">
-                    📅 Dates
-                  </label>
+                <div className="mb-5">
+                  <div className="mb-2 flex items-center gap-2 font-semibold text-gray-800">
+                    <CalendarDays size={18} className="text-yellow-600" />
+                    Dates
+                  </div>
 
-                  <div className="flex gap-2">
-                    <input
-                      type="date"
-                      value={checkIn}
-                      min={getTodayDate()}
-                      onChange={(event) => {
-                        const nouvelleDate =
-                          event.target.value;
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-sm text-gray-600">
+                        Date d'arrivée
+                      </label>
 
-                        setCheckIn(nouvelleDate);
-
-                        if (
-                          checkOut &&
-                          new Date(checkOut) <=
-                            new Date(nouvelleDate)
-                        ) {
-                          setCheckOut("");
+                      <input
+                        type="date"
+                        value={checkIn}
+                        min={new Date().toISOString().split("T")[0]}
+                        onChange={(event) =>
+                          modifierDate("checkIn", event.target.value)
                         }
-                      }}
-                      className="border rounded-lg px-3 py-2 flex-1 focus:outline-none focus:ring-2 focus:ring-yellow-500"
-                    />
+                        disabled={reservationEnCours}
+                        className="w-full rounded-xl border border-gray-300 px-3 py-3 outline-none focus:border-yellow-500"
+                      />
+                    </div>
 
-                    <input
-                      type="date"
-                      value={checkOut}
-                      min={checkIn || getTodayDate()}
-                      disabled={!checkIn}
-                      onChange={(event) =>
-                        setCheckOut(event.target.value)
-                      }
-                      className="border rounded-lg px-3 py-2 flex-1 focus:outline-none focus:ring-2 focus:ring-yellow-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
-                    />
+                    <div>
+                      <label className="mb-1 block text-sm text-gray-600">
+                        Date de départ
+                      </label>
+
+                      <input
+                        type="date"
+                        value={checkOut}
+                        min={checkIn || new Date().toISOString().split("T")[0]}
+                        onChange={(event) =>
+                          modifierDate("checkOut", event.target.value)
+                        }
+                        disabled={reservationEnCours}
+                        className="w-full rounded-xl border border-gray-300 px-3 py-3 outline-none focus:border-yellow-500"
+                      />
+                    </div>
                   </div>
 
                   {erreurDates && (
-                    <p className="text-red-500 text-sm mt-2">
+                    <p className="mt-2 text-sm font-medium text-red-600">
                       {erreurDates}
                     </p>
                   )}
                 </div>
 
-                <div className="mb-4">
-                  <label className="block text-sm font-medium mb-1">
-                    👥 Voyageurs
-                  </label>
+                <div className="mb-5">
+                  <div className="mb-2 flex items-center gap-2 font-semibold text-gray-800">
+                    <Users size={18} className="text-yellow-600" />
+                    Voyageurs
+                  </div>
 
-                  <div className="flex gap-2">
-                    <select
-                      value={adultes}
-                      onChange={(event) =>
-                        setAdultes(
-                          parseInt(event.target.value)
-                        )
-                      }
-                      className="border rounded-lg px-3 py-2 flex-1"
-                    >
-                      {[1, 2, 3, 4, 5, 6].map((nombre) => (
-                        <option key={nombre} value={nombre}>
-                          {nombre} adulte
-                          {nombre > 1 ? "s" : ""}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-sm text-gray-600">
+                        Adultes
+                      </label>
 
-                    <select
-                      value={enfants}
-                      onChange={(event) =>
-                        setEnfants(
-                          parseInt(event.target.value)
-                        )
-                      }
-                      className="border rounded-lg px-3 py-2 flex-1"
-                    >
-                      {[0, 1, 2, 3, 4].map((nombre) => (
-                        <option key={nombre} value={nombre}>
-                          {nombre} enfant
-                          {nombre > 1 ? "s" : ""}
-                        </option>
-                      ))}
-                    </select>
+                      <select
+                        value={adultes}
+                        onChange={(event) =>
+                          setAdultes(Number(event.target.value))
+                        }
+                        disabled={reservationEnCours}
+                        className="w-full rounded-xl border border-gray-300 px-3 py-3 outline-none focus:border-yellow-500"
+                      >
+                        {[1, 2, 3, 4, 5, 6].map((nombre) => (
+                          <option key={nombre} value={nombre}>
+                            {nombre} adulte{nombre > 1 ? "s" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-sm text-gray-600">
+                        Enfants
+                      </label>
+
+                      <select
+                        value={enfants}
+                        onChange={(event) =>
+                          setEnfants(Number(event.target.value))
+                        }
+                        disabled={reservationEnCours}
+                        className="w-full rounded-xl border border-gray-300 px-3 py-3 outline-none focus:border-yellow-500"
+                      >
+                        {[0, 1, 2, 3, 4, 5].map((nombre) => (
+                          <option key={nombre} value={nombre}>
+                            {nombre} enfant{nombre > 1 ? "s" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
 
-                {prixTotal !== null && prixTotal > 0 && (
-                  <div className="mb-4 p-3 bg-gray-50 rounded-lg text-center">
-                    <p className="text-sm text-gray-500">
-                      Total pour{" "}
-                      {calculerNuits(checkIn, checkOut)} nuit
-                      {calculerNuits(checkIn, checkOut) > 1
-                        ? "s"
-                        : ""}
-                    </p>
+                <div className="mb-5 rounded-xl bg-gray-50 p-5 text-center">
+                  <p className="text-gray-500">
+                    Total pour {calculerNuits(checkIn, checkOut) || 0} nuit
+                    {calculerNuits(checkIn, checkOut) > 1 ? "s" : ""}
+                  </p>
 
-                    <p className="text-3xl font-bold text-yellow-600">
-                      {prixTotal} DT
-                    </p>
+                  <p className="mt-1 text-3xl font-bold text-yellow-600">
+                    {prixTotal} DT
+                  </p>
+                </div>
+
+                {erreurReservation && (
+                  <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">
+                    {erreurReservation}
                   </div>
                 )}
 
                 <button
+                  type="button"
                   onClick={reserverMaintenant}
-                  disabled={
-                    reservationEnCours ||
-                    !checkIn ||
-                    !checkOut ||
-                    !!erreurDates
-                  }
-                  className="w-full bg-yellow-500 text-white py-3 rounded-lg font-semibold hover:bg-yellow-600 disabled:opacity-50"
+                  disabled={reservationEnCours}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-yellow-500 py-4 font-bold text-white transition hover:bg-yellow-600 disabled:cursor-not-allowed disabled:opacity-70"
                 >
+                  {reservationEnCours && (
+                    <Loader2 className="animate-spin" size={20} />
+                  )}
+
                   {reservationEnCours
                     ? "Réservation en cours..."
                     : "Confirmer la réservation"}
                 </button>
 
-                <p className="text-xs text-gray-400 text-center mt-4">
+                <p className="mt-4 text-center text-sm text-gray-400">
                   Annulation gratuite · Confirmation instantanée
                 </p>
               </>
             ) : (
-              <>
-                <div className="text-center mb-4">
-                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <CheckCircle
-                      size={34}
-                      className="text-green-500"
-                    />
-                  </div>
+              <div className="text-center">
+                <CheckCircle
+                  size={70}
+                  className="mx-auto text-green-600"
+                />
 
-                  <h2 className="text-2xl font-bold text-green-600">
-                    Réservation confirmée !
-                  </h2>
+                <h3 className="mt-4 text-2xl font-bold text-green-700">
+                  Réservation confirmée !
+                </h3>
 
-                  <p className="text-gray-500 text-sm mt-2">
-                    Votre réservation a été enregistrée avec succès.
-                  </p>
-                </div>
+                <p className="mt-2 text-gray-600">
+                  Votre réservation a été enregistrée avec succès.
+                </p>
 
-                <div className="mb-4 p-4 bg-gray-50 rounded-lg">
-                  <p className="font-bold text-lg">
+                <div className="mt-6 rounded-xl bg-gray-50 p-5 text-left">
+                  <p>
+                    <strong>Chambre :</strong>{" "}
                     {confirmationMessage.suite}
                   </p>
 
-                  <p className="text-yellow-600 font-bold">
-                    {confirmationMessage.prix} DT
-                    <span className="text-xs text-gray-400">
-                      {" "}
-                      /nuit
-                    </span>
+                  <p className="mt-2">
+                    <strong>Arrivée :</strong>{" "}
+                    {formatDate(confirmationMessage.checkIn)}
+                  </p>
+
+                  <p className="mt-2">
+                    <strong>Départ :</strong>{" "}
+                    {formatDate(confirmationMessage.checkOut)}
+                  </p>
+
+                  <p className="mt-2">
+                    <strong>Voyageurs :</strong>{" "}
+                    {confirmationMessage.adultes} adulte(s),{" "}
+                    {confirmationMessage.enfants} enfant(s)
+                  </p>
+
+                  <p className="mt-2">
+                    <strong>Nombre de nuits :</strong>{" "}
+                    {confirmationMessage.nuits}
+                  </p>
+
+                  <p className="mt-3 text-xl font-bold text-yellow-600">
+                    Total : {confirmationMessage.total} DT
                   </p>
                 </div>
 
-                <div className="mb-4">
-                  <p className="text-sm text-gray-500 mb-1">
-                    📅 Dates
-                  </p>
+                <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={fermerModal}
+                    className="flex-1 rounded-xl border border-gray-300 px-5 py-3 font-semibold text-gray-700 hover:bg-gray-50"
+                  >
+                    Fermer
+                  </button>
 
-                  <p className="font-medium">
-                    {new Date(
-                      confirmationMessage.dates.checkIn
-                    ).toLocaleDateString("fr-FR")}{" "}
-                    →{" "}
-                    {new Date(
-                      confirmationMessage.dates.checkOut
-                    ).toLocaleDateString("fr-FR")}
-                  </p>
+                  <button
+                    type="button"
+                    onClick={() => navigate("/mes-reservations")}
+                    className="flex-1 rounded-xl bg-yellow-500 px-5 py-3 font-semibold text-white hover:bg-yellow-600"
+                  >
+                    Mes réservations
+                  </button>
                 </div>
-
-                <div className="mb-4">
-                  <p className="text-sm text-gray-500 mb-1">
-                    👥 Voyageurs
-                  </p>
-
-                  <p className="font-medium">
-                    {confirmationMessage.adultes} adulte
-                    {confirmationMessage.adultes > 1
-                      ? "s"
-                      : ""}{" "}
-                    · {confirmationMessage.enfants} enfant
-                    {confirmationMessage.enfants > 1
-                      ? "s"
-                      : ""}
-                  </p>
-                </div>
-
-                <div className="mb-4 p-3 bg-yellow-50 rounded-lg text-center">
-                  <p className="text-sm text-gray-500">
-                    Total pour {confirmationMessage.nuits} nuit
-                    {confirmationMessage.nuits > 1 ? "s" : ""}
-                  </p>
-
-                  <p className="text-3xl font-bold text-yellow-600">
-                    {confirmationMessage.total} DT
-                  </p>
-                </div>
-
-                <button
-                  onClick={fermerModalEtReinitialiser}
-                  className="w-full bg-yellow-500 text-white py-3 rounded-lg font-semibold hover:bg-yellow-600"
-                >
-                  OK
-                </button>
-
-                <p className="text-xs text-gray-400 text-center mt-4">
-                  Annulation gratuite · Confirmation instantanée
-                </p>
-              </>
+              </div>
             )}
           </div>
         </div>
