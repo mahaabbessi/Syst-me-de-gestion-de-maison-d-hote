@@ -4,7 +4,7 @@ import { useParams } from "react-router-dom";
 import {
   getMaisonById,
   getChambresByMaison,
-  createReservation
+  createReservation,
 } from "../services/api";
 
 import {
@@ -13,7 +13,8 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
-  Image as ImageIcon
+  Image as ImageIcon,
+  CheckCircle,
 } from "lucide-react";
 
 import GoogleMapComponent from "../components/GoogleMap";
@@ -42,30 +43,30 @@ export default function MaisonDetailPage() {
   const [confirmationMessage, setConfirmationMessage] = useState(null);
   const [erreurDates, setErreurDates] = useState("");
 
-  // URL du backend Render
+  // Nouvelle notification visible dans la page
+  const [showNotification, setShowNotification] = useState(false);
+
+  // URL backend Render
   const BACKEND_URL =
     import.meta.env.VITE_API_URL ||
     "https://gestion-maison-hote-backend.onrender.com";
 
-  // Corrige les chemins des photos
+  // Corriger les chemins des photos
   const getPhotoUrl = (photo) => {
     if (!photo) return null;
 
-    // Si la photo est déjà une URL complète
     if (photo.startsWith("http://") || photo.startsWith("https://")) {
       return photo;
     }
 
-    // Si la photo commence par /, on garde le chemin
     if (photo.startsWith("/")) {
       return photo;
     }
 
-    // Si la photo est enregistrée comme images/photo.jpg
     return `/${photo}`;
   };
 
-  // URL alternative pour les photos stockées côté backend
+  // URL alternative pour les photos du backend
   const getBackendPhotoUrl = (photo) => {
     if (!photo) return null;
 
@@ -82,8 +83,6 @@ export default function MaisonDetailPage() {
 
   const handleImageError = (event, photo, fallback) => {
     const image = event.currentTarget;
-
-    // Première tentative : photo depuis le backend Render
     const backendPhoto = getBackendPhotoUrl(photo);
 
     if (
@@ -96,13 +95,12 @@ export default function MaisonDetailPage() {
       return;
     }
 
-    // Dernière solution : image par défaut
     if (fallback && image.src !== fallback) {
       image.src = fallback;
     }
   };
 
-  // Fonction date du jour
+  // Date du jour
   const getTodayDate = () => {
     const today = new Date();
 
@@ -115,12 +113,15 @@ export default function MaisonDetailPage() {
 
   // Calcul du nombre de nuits
   const calculerNuits = (debut, fin) => {
-    if (!debut || !fin) return 0;
+    if (!debut || !fin) {
+      return 0;
+    }
 
     const dateDebut = new Date(debut);
     const dateFin = new Date(fin);
 
     const diffTime = dateFin - dateDebut;
+
     const diffNuits = Math.ceil(
       diffTime / (1000 * 60 * 60 * 24)
     );
@@ -130,7 +131,9 @@ export default function MaisonDetailPage() {
 
   // Validation des dates
   const validerDates = (debut, fin) => {
-    if (!debut || !fin) return true;
+    if (!debut || !fin) {
+      return true;
+    }
 
     const dateDebut = new Date(debut);
     const dateFin = new Date(fin);
@@ -142,6 +145,7 @@ export default function MaisonDetailPage() {
       setErreurDates(
         "❌ La date de début ne peut pas être dans le passé"
       );
+
       return false;
     }
 
@@ -149,6 +153,7 @@ export default function MaisonDetailPage() {
       setErreurDates(
         "❌ La date de fin doit être après la date de début"
       );
+
       return false;
     }
 
@@ -156,7 +161,7 @@ export default function MaisonDetailPage() {
     return true;
   };
 
-  // Chargement de la maison et des chambres
+  // Charger la maison et les chambres
   useEffect(() => {
     const chargerDonnees = async () => {
       try {
@@ -182,13 +187,15 @@ export default function MaisonDetailPage() {
     }
   }, [id]);
 
-  // Calcul automatique du prix total
+  // Calcul automatique du prix
   useEffect(() => {
     if (chambreSelectionnee && checkIn && checkOut) {
       const nuits = calculerNuits(checkIn, checkOut);
 
       if (nuits > 0) {
-        setPrixTotal(chambreSelectionnee.prix * nuits);
+        setPrixTotal(
+          Number(chambreSelectionnee.prix || 0) * nuits
+        );
       } else {
         setPrixTotal(null);
       }
@@ -206,10 +213,13 @@ export default function MaisonDetailPage() {
     }
   }, [checkIn, checkOut]);
 
+  // Ouvrir la modale
   const ouvrirModal = (chambre) => {
     setChambreSelectionnee(chambre);
     setShowModal(true);
     setConfirmationMessage(null);
+    setShowNotification(false);
+
     setCheckIn("");
     setCheckOut("");
     setAdultes(2);
@@ -218,6 +228,7 @@ export default function MaisonDetailPage() {
     setErreurDates("");
   };
 
+  // Fermer et réinitialiser
   const fermerModalEtReinitialiser = () => {
     setShowModal(false);
     setConfirmationMessage(null);
@@ -231,6 +242,7 @@ export default function MaisonDetailPage() {
     setErreurDates("");
   };
 
+  // Créer la réservation
   const reserverMaintenant = async () => {
     if (!checkIn || !checkOut) {
       setErreurDates("❌ Veuillez sélectionner les dates");
@@ -238,6 +250,11 @@ export default function MaisonDetailPage() {
     }
 
     if (!validerDates(checkIn, checkOut)) {
+      return;
+    }
+
+    if (!chambreSelectionnee) {
+      alert("Veuillez sélectionner une chambre");
       return;
     }
 
@@ -249,6 +266,7 @@ export default function MaisonDetailPage() {
     }
 
     setReservationEnCours(true);
+    setErreurDates("");
 
     try {
       const response = await createReservation({
@@ -256,7 +274,7 @@ export default function MaisonDetailPage() {
         dateDebut: checkIn,
         dateFin: checkOut,
         nombreAdultes: adultes,
-        nombreEnfants: enfants
+        nombreEnfants: enfants,
       });
 
       const data = response.data;
@@ -265,18 +283,32 @@ export default function MaisonDetailPage() {
 
       const nuits = calculerNuits(checkIn, checkOut);
 
+      // Calcul local pour éviter un ancien prixTotal null
+      const totalCalcule =
+        Number(chambreSelectionnee.prix || 0) * nuits;
+
+      setPrixTotal(totalCalcule);
+
       setConfirmationMessage({
         suite: chambreSelectionnee.nom,
         prix: chambreSelectionnee.prix,
         dates: {
           checkIn,
-          checkOut
+          checkOut,
         },
         adultes,
         enfants,
         nuits,
-        total: prixTotal
+        total: totalCalcule,
       });
+
+      // Afficher la notification verte
+      setShowNotification(true);
+
+      // Cacher la notification après 6 secondes
+      setTimeout(() => {
+        setShowNotification(false);
+      }, 6000);
     } catch (error) {
       console.error("Erreur réservation :", error);
 
@@ -298,6 +330,7 @@ export default function MaisonDetailPage() {
     }
   };
 
+  // Photo suivante
   const nextPhoto = () => {
     if (maison?.photos?.length) {
       setCurrentPhotoIndex(
@@ -306,6 +339,7 @@ export default function MaisonDetailPage() {
     }
   };
 
+  // Photo précédente
   const prevPhoto = () => {
     if (maison?.photos?.length) {
       setCurrentPhotoIndex(
@@ -336,6 +370,39 @@ export default function MaisonDetailPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+
+      {/* NOTIFICATION DE CONFIRMATION */}
+      {showNotification && (
+        <div className="fixed top-5 right-5 z-[100] max-w-sm w-[calc(100%-40px)]">
+          <div className="bg-green-600 text-white rounded-xl shadow-2xl p-4 flex items-start gap-3">
+            <CheckCircle
+              size={28}
+              className="flex-shrink-0 mt-1"
+            />
+
+            <div className="flex-1">
+              <h3 className="font-bold text-lg">
+                Réservation confirmée !
+              </h3>
+
+              <p className="text-sm mt-1">
+                Votre réservation a été confirmée avec succès.
+              </p>
+
+              <p className="text-sm mt-1">
+                Vous pouvez consulter vos réservations dans votre espace client.
+              </p>
+            </div>
+
+            <button
+              onClick={() => setShowNotification(false)}
+              className="text-white hover:text-green-200"
+            >
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* PHOTO PRINCIPALE */}
       <div className="py-8">
@@ -404,6 +471,7 @@ export default function MaisonDetailPage() {
         <div className="flex items-center gap-4 mt-2 flex-wrap">
           <div className="flex items-center gap-1">
             <MapPin size={16} className="text-gray-400" />
+
             <span className="text-gray-600">
               {maison.adresse}, {maison.ville}
             </span>
@@ -443,7 +511,7 @@ export default function MaisonDetailPage() {
               </p>
             </div>
 
-            {/* SERVICES ET ÉQUIPEMENTS */}
+            {/* SERVICES */}
             <div className="bg-white rounded-xl shadow-sm p-6">
               <h2 className="text-xl font-bold mb-3">
                 Services & équipements
@@ -451,73 +519,43 @@ export default function MaisonDetailPage() {
 
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 {maison.equipements?.jardin && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-green-500">🌳</span>
-                    Jardin
-                  </div>
+                  <div>🌳 Jardin</div>
                 )}
 
                 {maison.equipements?.piscine && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-blue-500">🏊</span>
-                    Piscine
-                  </div>
+                  <div>🏊 Piscine</div>
                 )}
 
                 {maison.equipements?.parking && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-500">🅿️</span>
-                    Parking
-                  </div>
+                  <div>🅿️ Parking</div>
                 )}
 
                 {maison.equipements?.wifi && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-blue-500">📶</span>
-                    Wi-Fi
-                  </div>
+                  <div>📶 Wi-Fi</div>
                 )}
 
                 {maison.equipements?.climatisation && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-blue-500">❄️</span>
-                    Climatisation
-                  </div>
+                  <div>❄️ Climatisation</div>
                 )}
 
                 {maison.equipements?.restaurant && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-orange-500">🍽️</span>
-                    Restaurant
-                  </div>
+                  <div>🍽️ Restaurant</div>
                 )}
 
                 {maison.equipements?.navetteAeroport && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-purple-500">✈️</span>
-                    Navette
-                  </div>
+                  <div>✈️ Navette</div>
                 )}
 
                 {maison.equipements?.chambresFamiliales && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-green-500">👨‍👩‍👧‍👦</span>
-                    Famille
-                  </div>
+                  <div>👨‍👩‍👧‍👦 Famille</div>
                 )}
 
                 {maison.equipements?.serviceEtage && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-500">🛎️</span>
-                    Service
-                  </div>
+                  <div>🛎️ Service</div>
                 )}
 
                 {maison.equipements?.nonFumeurs && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-red-500">🚭</span>
-                    Non-fumeurs
-                  </div>
+                  <div>🚭 Non-fumeurs</div>
                 )}
               </div>
             </div>
@@ -534,6 +572,7 @@ export default function MaisonDetailPage() {
                     size={48}
                     className="mx-auto mb-2 opacity-50"
                   />
+
                   <p>Aucune photo disponible</p>
                 </div>
               ) : (
@@ -742,14 +781,14 @@ export default function MaisonDetailPage() {
         </div>
       </div>
 
-      {/* MODAL RÉSERVATION */}
+      {/* MODALE RÉSERVATION */}
       {showModal && chambreSelectionnee && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
           onClick={fermerModalEtReinitialiser}
         >
           <div
-            className="bg-white rounded-xl max-w-md w-full p-6"
+            className="bg-white rounded-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto"
             onClick={(event) => event.stopPropagation()}
           >
             {!confirmationMessage ? (
@@ -908,24 +947,19 @@ export default function MaisonDetailPage() {
               <>
                 <div className="text-center mb-4">
                   <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <svg
-                      className="w-8 h-8 text-green-500"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
+                    <CheckCircle
+                      size={34}
+                      className="text-green-500"
+                    />
                   </div>
 
                   <h2 className="text-2xl font-bold text-green-600">
-                    ✓ Réservation confirmée !
+                    Réservation confirmée !
                   </h2>
+
+                  <p className="text-gray-500 text-sm mt-2">
+                    Votre réservation a été enregistrée avec succès.
+                  </p>
                 </div>
 
                 <div className="mb-4 p-4 bg-gray-50 rounded-lg">
